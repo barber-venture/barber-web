@@ -564,8 +564,11 @@ class ApiController extends AppController {
                     'UserDetail.user_id' => $this->request->data['user_id']
             )));
             if (!empty($merchant)) {
+                $this->User->Review->recursive = 2;
+                $reviews = $this->User->Review->findAllByUserId($this->request->data['user_id']);
                 $response['status'] = true;
                 $response['data'] = $merchant;
+                $response['data']['Review'] = $reviews;
             } else {
                 $response['status'] = false;
                 $response['message'] = 'User details can not found';
@@ -579,15 +582,14 @@ class ApiController extends AppController {
 
     public function customerBookings() {
         if ($this->request->is('post')) {
-            $this->User->Appointment->recursive = -1;
             $appointments = $this->User->Appointment->find('all', array('conditions' => array(
-                    'Appointment.user_id' => $this->request->data['user_id'],
-                    'Appointment.status' => $this->request->data['status']
+                    'Appointment.user_id' => $this->request->data['user_id']
             )));
             if (!empty($appointments)) {
                 $bookings = array();
                 foreach ($appointments as $k => $appointment) {
                     $bookings[$k]['Appointment'] = $appointment['Appointment'];
+                    $bookings[$k]['Review'] = $appointment['Review'];
                     $userDetail = $this->User->Merchant->findById($appointment['Appointment']['merchant_id']);
                     if (!empty($userDetail)) {
                         $bookings[$k]['Merchant'] = $userDetail;
@@ -598,6 +600,202 @@ class ApiController extends AppController {
             } else {
                 $response['status'] = false;
                 $response['message'] = 'Appointments can not found';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function addReview() {
+        if ($this->request->is('post')) {
+            $appointmentDetails = $this->User->Appointment->findById($this->request->data['appointment_id']);
+            if (!empty($appointmentDetails)) {
+                $this->request->data['merchant_id'] = $appointmentDetails['Appointment']['merchant_id'];
+                if ($this->User->Review->save($this->request->data)) {
+                    if (isset($this->request->data['images']) && !empty($this->request->data['images'])) {
+                        foreach ($this->request->data['images'] as $image) {
+                            $image['user_id'] = $this->request->data['user_id'];
+                            $image['review_id'] = $this->User->Review->getInsertID();
+                            ;
+                            $image['image'] = $image;
+                            $this->User->Review->create();
+                            $this->User->Review->save($image);
+                        }
+                    }
+                    $response['status'] = true;
+                } else {
+                    $response['status'] = false;
+                    $response['message'] = 'Can not save';
+                }
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Appointment can not found';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function addParlorRequest() {
+        if ($this->request->is('post')) {
+            if (!isset($this->request->data['type'])) {
+                $response['status'] = false;
+                $response['message'] = 'Please select parlor type';
+            } else {
+                $merchantType = array();
+                foreach ($this->request->data['type'] as $key => $value) {
+                    $merchantType[] = $key;
+                }
+                $merchantType = implode(",", $merchantType);
+                $this->request->data['merchant_type'] = $merchantType;
+                $this->request->data['status'] = 1;
+                if ($this->User->Request->save($this->request->data)) {
+                    $response['status'] = true;
+                } else {
+                    $response['status'] = false;
+                    $response['message'] = 'Can not send request';
+                }
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getNearBySaloons() {
+        if ($this->request->is('post')) {
+            $lat = $this->request->data['lat'];
+            $lng = $this->request->data['lng'];
+            $radius = 5;
+            $sql = "SELECT
+                    Merchant.*,
+                    ( 6371 * acos( cos( radians({$lat}) ) * cos( radians( `lat` ) ) * cos( radians( `lng` ) - "
+                    . "radians({$lng}) ) + sin( radians({$lat}) ) * sin( radians( `lat` ) ) ) ) AS distance "
+                    . "FROM merchants as Merchant"
+                    . " HAVING distance <= {$radius}
+                ORDER BY distance ASC";
+            $merchants = $this->User->Merchant->query($sql);
+            if (!empty($merchants)) {
+                $merchantSearch = $this->User->MerchantSearch->findByUserId($this->request->data['user_id']);
+                if (!empty($merchantSearch)) {
+                    foreach ($merchantSearch as $k => $s) {
+                        if ($k >= 5) {
+                            $this->User->MerchantSearch->delete($s['MerchantSearch']['id']);
+                        }
+                    }
+                }
+                $insertSearch = $this->User->MerchantSearch->save($this->request->data);
+                $merchant = array();
+                foreach ($merchants as $k => $m) {
+                    $this->User->Merchant->MerchantType->recursive = 0;
+                    $merchantType = $this->User->Merchant->MerchantType->findAllByMerchantId($m['Merchant']['id']);
+                    $merchantImage = $this->User->Merchant->MerchantImage->findByMerchantId($m['Merchant']['id']);
+                    $merchant[$k] = $m;
+                    $merchant[$k]['MerchantType'] = $merchantType;
+                    $merchant[$k]['MerchantImage'] = $merchantImage;
+                }
+                $response['status'] = true;
+                $response['data'] = $merchant;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Saloons can not found at this location';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getSaloonDetail() {
+        if ($this->request->is('post')) {
+            $detail = $this->User->Merchant->findById($this->request->data['id']);
+            if (!empty($detail)) {
+                $response['status'] = true;
+                $response['data'] = $detail;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found detail';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getCustomerStartedBooking() {
+        if ($this->request->is('post')) {
+            $detail = $this->User->Appointment->find('first', array('conditions' => array(
+                    'Appointment.user_id' => $this->request->data['user_id'],
+                    'Appointment.id' => $this->request->data['id']
+            )));
+            if (!empty($detail)) {
+                $response['status'] = true;
+                $response['data'] = $detail;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found detail';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getInvoiceDetail() {
+        if ($this->request->is('post')) {
+            $detail = $this->User->Invoice->find('first', array('conditions' => array(
+                    'Invoice.user_id' => $this->request->data['user_id'],
+                    'Invoice.appointment_id' => $this->request->data['appointment_id']
+            )));
+            if (!empty($detail)) {
+                $response['status'] = true;
+                $response['data'] = $detail;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found invoice details, please contact to administrator';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function updateInvoice() {
+        if ($this->request->is('post')) {
+            $this->User->Invoice->id = $this->request->data['id'];
+            if ($this->User->Invoice->save($this->request->data)) {
+                $response['status'] = true;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not send request';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function bookSlot() {
+        if ($this->request->is('post')) {
+            $this->request->data['status'] = 0;
+            $this->request->data['appointment_date'] = date("Y-m-d", strtotime($this->request->data['date']));
+            $this->request->data['appointment_time'] = date("H:i:s", strtotime($this->request->data['time']));
+            if ($this->User->Appointment->save($this->request->data)) {
+                $response['status'] = true;
+                $response['data'] = $this->User->Appointment->getInsertID();
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not send request';
             }
         } else {
             $response['status'] = false;
