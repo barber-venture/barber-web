@@ -18,6 +18,7 @@ class ApiController extends AppController {
      * @var array
      */
     public $uses = array('User');
+    public $components = array("Common");
 
     public function beforeFilter() {
         parent::beforeFilter();
@@ -224,6 +225,9 @@ class ApiController extends AppController {
                     'Merchant.user_id' => $this->request->data['user_id']
             )));
             if (!empty($merchant)) {
+                $merchant['Merchant']['working_day'] = $this->Common->getWorkingDays($merchant['MerchantWorkingDay']);
+                $merchant['Merchant']['start_time'] = date("h:i a", strtotime($merchant['Merchant']['start_time']));
+                $merchant['Merchant']['end_time'] = date("h:i a", strtotime($merchant['Merchant']['end_time']));
                 $response['status'] = true;
                 $response['data'] = $merchant;
             } else {
@@ -414,6 +418,41 @@ class ApiController extends AppController {
                 $this->User->Appointment->id = $this->request->data['id'];
                 $appointment['status'] = $this->request->data['status'];
                 if ($this->User->Appointment->save($appointment)) {
+
+                    if ($this->request->data['status'] == 1) {
+                        $subject = 'accepted';
+                    } else if ($this->request->data['status'] == 2) {
+                        $subject = 'rejected';
+                    } else if ($this->request->data['status'] == 3) {
+                        $subject = 'started';
+                    } else if ($this->request->data['status'] == 4) {
+                        $subject = 'completed';
+                    } else {
+                        $subject = 'canceled';
+                    }
+
+                    $description = 'Your appointment to ' . $saloon . ' on' . $time . ' has been' . $subject;
+                    $subject = 'Appointment' . $subject;
+
+                    $device = $this->User->Device->findByUserId($this->request->data['user_id']);
+                    if (!empty($device)) {
+                        $androidIds = array($device['Device']['registrationid']);
+                        $this->PushMessage->create();
+                        $msg['user_id'] = $device['Device']['user_id'];
+                        $msg['subject'] = $subject;
+                        $msg['description'] = $description;
+                        $this->PushMessage->save($msg);
+                        if (!empty($androidIds)) {
+                            $message = array
+                                (
+                                'message' => $description,
+                                'title' => $subject,
+                                'vibrate' => 1,
+                                'sound' => 1
+                            );
+                            $this->sendPushToAndroid($androidIds, $message);
+                        }
+                    }
                     $response['status'] = true;
                 } else {
                     $response['status'] = false;
@@ -684,6 +723,9 @@ class ApiController extends AppController {
                     $this->User->Merchant->id = $appointmentDetails['Appointment']['merchant_id'];
                     $merchant['current_rating'] = $avg;
                     $this->User->Merchant->save($merchant);
+                    $this->User->id = $this->request->data['user_id'];
+                    $user['current_rating'] = $avg;
+                    $this->User->save($user);
                     $response['status'] = true;
                 } else {
                     $response['status'] = false;
@@ -776,6 +818,25 @@ class ApiController extends AppController {
         if ($this->request->is('post')) {
             $detail = $this->User->Merchant->findById($this->request->data['id']);
             if (!empty($detail)) {
+                $already = $this->User->MerchantView->find("first", array("conditions" => array(
+                        "MerchantView.merchant_id" => $this->request->data['id'],
+                        "MerchantView.user_id" => $this->request->data['user_id']
+                )));
+                if (empty($already)) {
+                    $this->User->MerchantView->query("DELETE FROM `merchant_views`
+                                                WHERE id NOT IN (
+                                                  SELECT id
+                                                  FROM (
+                                                    SELECT id
+                                                    FROM `merchant_views`
+                                                    ORDER BY id DESC
+                                                    LIMIT 4
+                                                  ) foo
+                                    );");
+                    $merchantView['merchant_id'] = $this->request->data['id'];
+                    $merchantView['user_id'] = $this->request->data['user_id'];
+                    $this->User->MerchantView->save($merchantView);
+                }
                 $response['status'] = true;
                 $response['data'] = $detail;
             } else {
@@ -858,6 +919,44 @@ class ApiController extends AppController {
             $this->request->data['appointment_date'] = date("Y-m-d", strtotime($this->request->data['date']));
             $this->request->data['appointment_time'] = date("H:i:s", strtotime($this->request->data['time']));
             if ($this->User->Appointment->save($this->request->data)) {
+                $merchantId = $this->request->data['merchant_id'];
+                $merchantDetails = $this->User->Merchant->findById($merchantId);
+                if (!empty($merchantDetails)) {
+                    $userId = array();
+                    if (!empty($merchantDetails['Barber'])) {
+                        foreach ($merchantDetails['Barber'] as $barber) {
+                            $userId[] = $barber['user_id'];
+                        }
+                        $userId[] = $merchantDetails['Merchant']['user_id'];
+                    }
+                    $devices = $this->User->Device->find('all', array('conditions' => array(
+                            'Device.user_id' => $userId
+                    )));
+                    if (!empty($devices)) {
+                        $androidIds = array();
+                        $this->loadModel('PushMessage');
+                        $subject = 'Appointment';
+                        $description = 'A new appointment has been received, please go to dashboard page and check the details';
+                        foreach ($devices as $device) {
+                            $androidIds[] = $device['Device']['registrationid'];
+                            $this->PushMessage->create();
+                            $msg['user_id'] = $device['Device']['user_id'];
+                            $msg['subject'] = $subject;
+                            $msg['description'] = $description;
+                            $this->PushMessage->save($msg);
+                        }
+                        if (!empty($androidIds)) {
+                            $message = array
+                                (
+                                'message' => $description,
+                                'title' => $subject,
+                                'vibrate' => 1,
+                                'sound' => 1
+                            );
+                            $this->sendPushToAndroid($androidIds, $message);
+                        }
+                    }
+                }
                 $response['status'] = true;
                 $response['data'] = $this->User->Appointment->getInsertID();
             } else {
@@ -1034,19 +1133,18 @@ class ApiController extends AppController {
         echo json_encode($response);
     }
 
-    public function sendPushToAndroid($ids=array(), $msg=array()) {
-        $ids = array('APA91bF648Zr8yvZXLc8dgNJDhCD1Xyftv4ufzUcgoznMPmZkkyGqsBSd5Jr_865TCa6w6BzhO0o_WZHX0tJ566sVrq2a4hAafUUUFe0kVf7-NmYnRY_8Rvmw8y05_ZDScl-6hjrHx4i');
+    public function sendPushToAndroid($ids = array(), $msg = array()) {
         define('API_ACCESS_KEY', 'AIzaSyDxV5hyU6S0zjvNQbdJOUIA7tMw1udQaiM');
         $registrationIds = $ids;
-        $msg = array
-            (
-            'message' => 'here is a message. message',
-            'title' => 'This is a title. title',
-            'subtitle' => 'This is a subtitle. subtitle',
-            'tickerText' => 'Ticker text here...Ticker text here...Ticker text here',
-            'vibrate' => 1,
-            'sound' => 1
-        );
+        /* $msg = array
+          (
+          'message' => 'here is a message. message',
+          'title' => 'This is a title. title',
+          'subtitle' => 'This is a subtitle. subtitle',
+          'tickerText' => 'Ticker text here...Ticker text here...Ticker text here',
+          'vibrate' => 1,
+          'sound' => 1
+          ); */
         $fields = array
             (
             'registration_ids' => $registrationIds,
@@ -1068,7 +1166,231 @@ class ApiController extends AppController {
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($fields));
         $result = curl_exec($ch);
         curl_close($ch);
-        echo $result;die;
+        return $result;
+    }
+
+    public function bankDetails() {
+        if ($this->request->is('post')) {
+            $merchant = $this->User->Merchant->find('first', array('conditions' => array(
+                    'Merchant.user_id' => $this->request->data['merchant_user_id']
+            )));
+            if (!empty($merchant)) {
+                $this->User->Merchant->id = $merchant['Merchant']['id'];
+                if ($this->User->Merchant->save($this->request->data)) {
+                    $merchant = $this->User->Merchant->find('first', array('conditions' => array(
+                            'Merchant.user_id' => $this->request->data['merchant_user_id']
+                    )));
+                    $response['status'] = true;
+                    $response['data'] = $merchant;
+                } else {
+                    $response['status'] = false;
+                    $response['message'] = 'Can not update';
+                }
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Merchant details can not found';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getUnreadNotificationCount() {
+        $response['status'] = false;
+        $response['message'] = 'Request is not valid';
+        if ($this->request->is('post')) {
+            $notification = $this->User->PushMessage->find('count', array('conditions' => array(
+                    'PushMessage.user_id' => $this->request->data['user_id'],
+                    'PushMessage.is_read' => 0
+            )));
+            if (!empty($notification)) {
+                $response['status'] = true;
+                $response['data'] = $notification;
+            }
+        }
+        echo json_encode($response);
+    }
+
+    public function getAllNotifications() {
+        if ($this->request->is('post')) {
+            $notification = $this->User->PushMessage->find('all', array('conditions' => array(
+                    'PushMessage.user_id' => $this->request->data['user_id']
+            )));
+            if (!empty($notification)) {
+                $this->User->PushMessage->updateAll(
+                        array('PushMessage.is_read' => 1), array('PushMessage.user_id' => $this->request->data['user_id'])
+                );
+                $response['status'] = true;
+                $response['data'] = $notification;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found notifications';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function makeReviewLike() {
+        if ($this->request->is('post')) {
+            $alreadyLike = $this->User->Review->ReviewLike->find("first", array("conditions" => array(
+                    "ReviewLike.review_id" => $this->request->data['review_id'],
+                    "ReviewLike.user_id" => $this->request->data['user_id']
+            )));
+            if (!empty($alreadyLike)) {
+                $this->User->Review->ReviewLike->id = $alreadyLike['ReviewLike']['id'];
+                $this->User->Review->ReviewLike->delete();
+            } else {
+                $this->User->Review->ReviewLike->save($this->request->data);
+            }
+            $total = $this->User->Review->ReviewLike->find("count", array("conditions" => array(
+                    "ReviewLike.review_id" => $this->request->data['review_id']
+            )));
+            $this->User->Review->id = $this->request->data['review_id'];
+            $this->User->Review->save(array("current_likes" => $total));
+            $response['status'] = true;
+            $response['data'] = $total;
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function makeReviewComment() {
+        if ($this->request->is('post')) {
+            $alreadyComment = $this->User->Review->ReviewComment->find("first", array("conditions" => array(
+                    "ReviewComment.review_id" => $this->request->data['review_id'],
+                    "ReviewComment.user_id" => $this->request->data['user_id']
+            )));
+            if (!empty($alreadyComment)) {
+                $response['status'] = false;
+                $response['message'] = 'You have already commented';
+            } else {
+                $this->User->Review->ReviewComment->save($this->request->data);
+                $total = $this->User->Review->ReviewComment->find("count", array("conditions" => array(
+                        "ReviewComment.review_id" => $this->request->data['review_id']
+                )));
+                $this->User->Review->id = $this->request->data['review_id'];
+                $this->User->Review->save(array("current_comments" => $total));
+                $response['status'] = true;
+                $response['data'] = $total;
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function makeReviewShare() {
+        if ($this->request->is('post')) {
+            $this->User->Review->ReviewShare->save($this->request->data);
+            $total = $this->User->Review->ReviewShare->find("count", array("conditions" => array(
+                    "ReviewShare.review_id" => $this->request->data['review_id']
+            )));
+            $this->User->Review->id = $this->request->data['review_id'];
+            $this->User->Review->save(array("current_shares" => $total));
+            $response['status'] = true;
+            $response['data'] = $total;
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getRecentlyViewed() {
+        if ($this->request->is('post')) {
+            $saloons = $this->User->MerchantView->find("all", array("conditions" => array(
+                    "MerchantView.user_id" => $this->request->data['user_id']
+            )));
+            if (!empty($saloons)) {
+                $newArray = array();
+                foreach ($saloons as $k => $saloon) {
+                    $types = $this->User->Merchant->MerchantType->findAllByMerchantId($saloon['MerchantView']['merchant_id']);
+                    $images = $this->User->Merchant->MerchantImage->findByMerchantId($saloon['MerchantView']['merchant_id']);
+                    $newArray[$k] = $saloon;
+                    $newArray[$k]['MerchantType'] = $types;
+                    $newArray[$k]['MerchantImage'] = $images;
+                }
+                $saloons = $newArray;
+                $response['status'] = true;
+                $response['data'] = $saloons;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not find saloons';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getMyAllReviews() {
+        if ($this->request->is('post')) {
+            $this->User->Review->recursive = -1;
+            $reviews = $this->User->Review->findAllByUserId($this->request->data['user_id']);
+            if (!empty($reviews)) {
+                $newArray = array();
+                foreach ($reviews as $k => $review) {
+                    $newArray[$k] = $review;
+                    $newArray[$k]['Review']['created'] = date("d M - h:i a", strtotime($review['Review']['created']));
+                    $newArray[$k]['UserImage'] = $this->User->UserImage->findAllByReviewId($review['Review']['id']);
+                    $this->User->Merchant->recursive = -1;
+                    $newArray[$k]['Merchant'] = $this->User->Merchant->findById($review['Review']['merchant_id']);
+                    $newArray[$k]['MerchantType'] = $this->User->Merchant->MerchantType->findAllByMerchantId($review['Review']['merchant_id']);
+                    $newArray[$k]['Like'] = $this->User->Review->ReviewLike->find('count', array('conditions' => array(
+                            'ReviewLike.review_id' => $review['Review']['id']
+                    )));
+                    $newArray[$k]['Comment'] = $this->User->Review->ReviewComment->find('count', array('conditions' => array(
+                            'ReviewComment.review_id' => $review['Review']['id']
+                    )));
+                    $newArray[$k]['Share'] = $this->User->Review->ReviewShare->find('count', array('conditions' => array(
+                            'ReviewShare.review_id' => $review['Review']['id']
+                    )));
+                }
+                $reviews = $newArray;
+                $response['status'] = true;
+                $response['data'] = $reviews;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found reviews';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getAllComments() {
+        if ($this->request->is('post')) {
+            $comments = $this->User->Review->ReviewComment->findAllByReviewId($this->request->data['id']);
+            if (!empty($comments)) {
+                $newArray = array();
+                foreach($comments as $k=>$comment){
+                    $newArray[$k] = $comment;
+                    $newArray[$k]['ReviewComment']['created'] = date("d M y h:i a", strtotime($comment['ReviewComment']['created']));
+                    $newArray[$k]['User'] = $this->User->UserDetail->findByUserId($comment['ReviewComment']['user_id']);
+                }
+                $comments = $newArray;
+                $response['status'] = true;
+                $response['data'] = $comments;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found comments';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
     }
 
 }
