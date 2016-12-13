@@ -228,6 +228,8 @@ class ApiController extends AppController {
                 $merchant['Merchant']['working_day'] = $this->Common->getWorkingDays($merchant['MerchantWorkingDay']);
                 $merchant['Merchant']['start_time'] = date("h:i a", strtotime($merchant['Merchant']['start_time']));
                 $merchant['Merchant']['end_time'] = date("h:i a", strtotime($merchant['Merchant']['end_time']));
+                $merchant['Merchant']['set_start_time'] = date("h:i:s", strtotime($merchant['Merchant']['start_time']));
+                $merchant['Merchant']['set_end_time'] = date("h:i:s", strtotime($merchant['Merchant']['end_time']));
                 $response['status'] = true;
                 $response['data'] = $merchant;
             } else {
@@ -479,6 +481,8 @@ class ApiController extends AppController {
                     $bookings = array();
                     foreach ($reviews as $k => $review) {
                         $bookings[$k]['Review'] = $review['Review'];
+                        $bookings[$k]['Review']['created_date'] = date("d M y",strtotime($review['Review']['created']));
+                        $bookings[$k]['Review']['created_time'] = date("h:i a",strtotime($review['Review']['created']));
                         $userDetail = $this->User->UserDetail->findByUserId($review['Review']['user_id']);
                         if (!empty($userDetail)) {
                             $bookings[$k]['UserDetail'] = $userDetail['UserDetail'];
@@ -1345,15 +1349,15 @@ class ApiController extends AppController {
                     $this->User->Merchant->recursive = -1;
                     $newArray[$k]['Merchant'] = $this->User->Merchant->findById($review['Review']['merchant_id']);
                     $newArray[$k]['MerchantType'] = $this->User->Merchant->MerchantType->findAllByMerchantId($review['Review']['merchant_id']);
-                    $newArray[$k]['Like'] = $this->User->Review->ReviewLike->find('count', array('conditions' => array(
-                            'ReviewLike.review_id' => $review['Review']['id']
-                    )));
-                    $newArray[$k]['Comment'] = $this->User->Review->ReviewComment->find('count', array('conditions' => array(
-                            'ReviewComment.review_id' => $review['Review']['id']
-                    )));
-                    $newArray[$k]['Share'] = $this->User->Review->ReviewShare->find('count', array('conditions' => array(
-                            'ReviewShare.review_id' => $review['Review']['id']
-                    )));
+                    /* $newArray[$k]['Like'] = $this->User->Review->ReviewLike->find('count', array('conditions' => array(
+                      'ReviewLike.review_id' => $review['Review']['id']
+                      )));
+                      $newArray[$k]['Comment'] = $this->User->Review->ReviewComment->find('count', array('conditions' => array(
+                      'ReviewComment.review_id' => $review['Review']['id']
+                      )));
+                      $newArray[$k]['Share'] = $this->User->Review->ReviewShare->find('count', array('conditions' => array(
+                      'ReviewShare.review_id' => $review['Review']['id']
+                      ))); */
                 }
                 $reviews = $newArray;
                 $response['status'] = true;
@@ -1374,7 +1378,7 @@ class ApiController extends AppController {
             $comments = $this->User->Review->ReviewComment->findAllByReviewId($this->request->data['id']);
             if (!empty($comments)) {
                 $newArray = array();
-                foreach($comments as $k=>$comment){
+                foreach ($comments as $k => $comment) {
                     $newArray[$k] = $comment;
                     $newArray[$k]['ReviewComment']['created'] = date("d M y h:i a", strtotime($comment['ReviewComment']['created']));
                     $newArray[$k]['User'] = $this->User->UserDetail->findByUserId($comment['ReviewComment']['user_id']);
@@ -1385,6 +1389,80 @@ class ApiController extends AppController {
             } else {
                 $response['status'] = false;
                 $response['message'] = 'Can not found comments';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getReviewDetail() {
+        if ($this->request->is('post')) {
+            $review = $this->User->Review->findById($this->request->data['id']);
+            if (!empty($review)) {
+                $response['status'] = true;
+                $response['data'] = $review;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not found review';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function getAllCommunityReviews() {
+        if ($this->request->is('post')) {
+            $getReviews = $this->User->Review->query('select Review.* from reviews as Review, users as User, followers as Follower '
+                    . 'where Follower.follower_id=' . $this->request->data["user_id"] . ' and Follower.user_id=User.id '
+                    . 'and User.id=Review.user_id');
+            //pr($getReviews);die;
+            if (!empty($getReviews)) {
+                $newArray = array();
+                foreach ($getReviews as $k => $reviews) {
+                    $this->User->Merchant->recursive = -1;
+                    $merchant = $this->User->Merchant->findById($reviews['Review']['merchant_id']);
+                    //pr($merchant);die;
+                    $merchantTypes = $this->User->Merchant->MerchantType->findAllByMerchantId($merchant['Merchant']['id']);
+                    $userImages = $this->User->UserImage->findAllByReviewId($reviews['Review']['id']);
+                    $newArray[$k]['Review'] = $reviews['Review'];
+                    $newArray[$k]['Merchant'] = $merchant;
+                    $newArray[$k]['MerchantType'] = $merchantTypes;
+                    $newArray[$k]['UserImage'] = $userImages;
+                }
+                $getReviews = $newArray;
+                $response['status'] = true;
+                $response['data'] = $getReviews;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Reviews can not found';
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function findFriends() {
+        if ($this->request->is('post')) {
+            $allFollowers = $this->User->Follower->find("list",array("conditions"=>array(
+                "Follower.follower_id" => $this->request->data['user_id']
+            ),"fields"=>array("Follower.id","Follower.user_id")));
+            $allFollowers[] = $this->request->data['user_id'];
+            sort($allFollowers);
+            $users = $this->User->UserDetail->find("all", array("conditions" => array(
+                    "UserDetail.name like " => $this->request->data['name']."%",
+                    "UserDetail.user_id <>" => $allFollowers,
+            )));
+            if (!empty($users)) {
+                $response['status'] = true;
+                $response['data'] = $users;
+            } else {
+                $response['status'] = false;
             }
         } else {
             $response['status'] = false;
