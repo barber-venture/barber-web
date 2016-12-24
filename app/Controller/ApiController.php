@@ -126,6 +126,8 @@ class ApiController extends AppController {
                 )));
                 if (!empty($login)) {
                     if ($login['User']['status'] == 1) {
+                        $merchantImage = $this->User->Merchant->MerchantImage->findByMerchantId($login['Merchant']['id']);
+                        $login['MerchantImage'] = $merchantImage['MerchantImage'];
                         $response['status'] = true;
                         $response['data'] = $login;
                     } else {
@@ -481,8 +483,8 @@ class ApiController extends AppController {
                     $bookings = array();
                     foreach ($reviews as $k => $review) {
                         $bookings[$k]['Review'] = $review['Review'];
-                        $bookings[$k]['Review']['created_date'] = date("d M y",strtotime($review['Review']['created']));
-                        $bookings[$k]['Review']['created_time'] = date("h:i a",strtotime($review['Review']['created']));
+                        $bookings[$k]['Review']['created_date'] = date("d M y", strtotime($review['Review']['created']));
+                        $bookings[$k]['Review']['created_time'] = date("h:i a", strtotime($review['Review']['created']));
                         $userDetail = $this->User->UserDetail->findByUserId($review['Review']['user_id']);
                         if (!empty($userDetail)) {
                             $bookings[$k]['UserDetail'] = $userDetail['UserDetail'];
@@ -662,9 +664,15 @@ class ApiController extends AppController {
             if (!empty($merchant)) {
                 $this->User->Review->recursive = 2;
                 $reviews = $this->User->Review->findAllByUserId($this->request->data['user_id']);
+                $newArray = array();
+                foreach ($reviews as $k => $review) {
+                    $newArray[$k] = $review;
+                    $newArray[$k]['Review']['created_date'] = date("d M y",strtotime($review['Review']['created']));
+                    $newArray[$k]['Review']['created_time'] = date("h:i a",strtotime($review['Review']['created']));
+                }
                 $response['status'] = true;
                 $response['data'] = $merchant;
-                $response['data']['Review'] = $reviews;
+                $response['data']['Review'] = $newArray;
             } else {
                 $response['status'] = false;
                 $response['message'] = 'User details can not found';
@@ -1449,13 +1457,13 @@ class ApiController extends AppController {
 
     public function findFriends() {
         if ($this->request->is('post')) {
-            $allFollowers = $this->User->Follower->find("list",array("conditions"=>array(
-                "Follower.follower_id" => $this->request->data['user_id']
-            ),"fields"=>array("Follower.id","Follower.user_id")));
+            $allFollowers = $this->User->Follower->find("list", array("conditions" => array(
+                    "Follower.follower_id" => $this->request->data['user_id']
+                ), "fields" => array("Follower.id", "Follower.user_id")));
             $allFollowers[] = $this->request->data['user_id'];
             sort($allFollowers);
             $users = $this->User->UserDetail->find("all", array("conditions" => array(
-                    "UserDetail.name like " => $this->request->data['name']."%",
+                    "UserDetail.name like " => $this->request->data['name'] . "%",
                     "UserDetail.user_id <>" => $allFollowers,
             )));
             if (!empty($users)) {
