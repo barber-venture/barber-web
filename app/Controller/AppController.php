@@ -28,6 +28,7 @@ class AppController extends Controller {
     );
 
     public function beforeFilter() {
+        Configure::write('App.baseUrl', 'http://' . $_SERVER['HTTP_HOST'] . $this->base);
         $this->loadModel('Setting');
         $settings = $this->Setting->find('first');
         $this->set('settings', $settings);

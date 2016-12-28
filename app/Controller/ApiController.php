@@ -27,8 +27,10 @@ class ApiController extends AppController {
     }
 
     public function merchantSignup() {
+
         if ($this->request->is('post')) {
             $role = $this->User->Role->findByName('merchant');
+
             if (!empty($role)) {
                 $already = $this->User->findByEmail($this->request->data['email']);
                 if (empty($already)) {
@@ -94,13 +96,50 @@ class ApiController extends AppController {
                         $merchantType['name'] = $value;
                         $this->User->Merchant->MerchantOffering->save($merchantType);
                     }
-                    $this->User->Merchant->MerchantImage->deleteAll(array('MerchantImage.merchant_id' => $merchantId));
+
+                    $exists = array();
+                    $tobeAdd = array();
                     foreach ($this->request->data['images'] as $key => $value) {
-                        $this->User->Merchant->MerchantImage->create();
-                        $merchantType['merchant_id'] = $merchantId;
-                        $merchantType['image'] = $value;
-                        $this->User->Merchant->MerchantImage->save($merchantType);
+                        if (strpos($value, Configure::read("App.baseUrl") . "/files/") !== false) {
+                            $exists[] = str_replace(Configure::read("App.baseUrl") . "/files/", "", $value);
+                        } else {
+                            $tobeAdd[] = $value;
+                        }
                     }
+
+                    $toBeDelete = $this->User->Merchant->MerchantImage->find("all", array("conditions" => array(
+                            "MerchantImage.merchant_id" => $merchantId,
+                            "NOT" => array("MerchantImage.image" => $exists)
+                    )));
+                    if (!empty($toBeDelete)) {
+                        foreach ($toBeDelete as $a) {
+                            if (file_exists("files/" . $a['MerchantImage']['image'])) {
+                                unlink("files/" . $a['MerchantImage']['image']);
+                                $this->User->Merchant->MerchantImage->delete($a['MerchantImage']['id']);
+                            }
+                        }
+                    }
+
+                    //$this->User->Merchant->MerchantImage->deleteAll(array('MerchantImage.merchant_id' => $merchantId));
+                    if (!empty($tobeAdd)) {
+                        foreach ($tobeAdd as $key => $value) {
+                            $filename = uniqid() . ".jpg";
+                            $dest = "files";
+                            if (!is_dir($dest)) {
+                                mkdir($dest);
+                            }
+
+                            $data = explode(',', $value);
+
+                            if (file_put_contents($dest . DIRECTORY_SEPARATOR . $filename, base64_decode($data[1]))) {
+                                $this->User->Merchant->MerchantImage->create();
+                                $merchantType['merchant_id'] = $merchantId;
+                                $merchantType['image'] = $filename;
+                                $this->User->Merchant->MerchantImage->save($merchantType);
+                            }
+                        }
+                    }
+
                     $response['status'] = true;
                 } else {
                     $response['status'] = false;
@@ -127,7 +166,8 @@ class ApiController extends AppController {
                 if (!empty($login)) {
                     if ($login['User']['status'] == 1) {
                         $merchantImage = $this->User->Merchant->MerchantImage->findByMerchantId($login['Merchant']['id']);
-                        $login['MerchantImage'] = $merchantImage['MerchantImage'];
+                        $login['MerchantImage']['image'] = Configure::read('App.baseUrl') . "/files/" . $merchantImage['MerchantImage']['image'];
+                        ;
                         $response['status'] = true;
                         $response['data'] = $login;
                     } else {
@@ -232,11 +272,17 @@ class ApiController extends AppController {
                 $merchant['Merchant']['end_time'] = date("h:i a", strtotime($merchant['Merchant']['end_time']));
                 $merchant['Merchant']['set_start_time'] = date("h:i:s", strtotime($merchant['Merchant']['start_time']));
                 $merchant['Merchant']['set_end_time'] = date("h:i:s", strtotime($merchant['Merchant']['end_time']));
+                $images = array();
+                foreach ($merchant['MerchantImage'] as $k => $m) {
+                    $images[$k] = $m;
+                    $images[$k]['image'] = Configure::read('App.baseUrl') . "/files/" . $m['image'];
+                }
+                $merchant['MerchantImage'] = $images;
                 $response['status'] = true;
                 $response['data'] = $merchant;
             } else {
                 $response['status'] = false;
-                $response['message'] = 'Merchant details can not found';
+                $response['message'] = 'Can not found your details, please complete the form';
             }
         } else {
             $response['status'] = false;
@@ -422,7 +468,6 @@ class ApiController extends AppController {
                 $this->User->Appointment->id = $this->request->data['id'];
                 $appointment['status'] = $this->request->data['status'];
                 if ($this->User->Appointment->save($appointment)) {
-
                     if ($this->request->data['status'] == 1) {
                         $subject = 'accepted';
                     } else if ($this->request->data['status'] == 2) {
@@ -435,12 +480,19 @@ class ApiController extends AppController {
                         $subject = 'canceled';
                     }
 
-                    $description = 'Your appointment to ' . $saloon . ' on' . $time . ' has been' . $subject;
-                    $subject = 'Appointment' . $subject;
+                    $saloon = $appointments['Merchant']['name'];
+                    $time = date("d M, h:i a", strtotime($appointments['Appointment']['created']));
 
-                    $device = $this->User->Device->findByUserId($this->request->data['user_id']);
+                    $description = 'Your appointment to ' . $saloon . ' on ' . $time . ' has been ' . $subject;
+                    $subject = 'Appointment ' . $subject;
+
+                    $device = $this->User->Device->findByUserId($appointments['Appointment']['user_id']);
+                    /* $response['status'] = false;
+                      $response['message'] = print_r($device, true);
+                      echo json_encode($response);die; */
                     if (!empty($device)) {
                         $androidIds = array($device['Device']['registrationid']);
+                        $this->loadModel('PushMessage');
                         $this->PushMessage->create();
                         $msg['user_id'] = $device['Device']['user_id'];
                         $msg['subject'] = $subject;
@@ -667,15 +719,15 @@ class ApiController extends AppController {
                 $newArray = array();
                 foreach ($reviews as $k => $review) {
                     $newArray[$k] = $review;
-                    $newArray[$k]['Review']['created_date'] = date("d M y",strtotime($review['Review']['created']));
-                    $newArray[$k]['Review']['created_time'] = date("h:i a",strtotime($review['Review']['created']));
+                    $newArray[$k]['Review']['created_date'] = date("d M y", strtotime($review['Review']['created']));
+                    $newArray[$k]['Review']['created_time'] = date("h:i a", strtotime($review['Review']['created']));
                 }
                 $response['status'] = true;
                 $response['data'] = $merchant;
                 $response['data']['Review'] = $newArray;
             } else {
                 $response['status'] = false;
-                $response['message'] = 'User details can not found';
+                $response['message'] = 'We do not have your details, please fill the form to continue with us';
             }
         } else {
             $response['status'] = false;
@@ -939,8 +991,8 @@ class ApiController extends AppController {
                         foreach ($merchantDetails['Barber'] as $barber) {
                             $userId[] = $barber['user_id'];
                         }
-                        $userId[] = $merchantDetails['Merchant']['user_id'];
                     }
+                    $userId[] = $merchantDetails['Merchant']['user_id'];
                     $devices = $this->User->Device->find('all', array('conditions' => array(
                             'Device.user_id' => $userId
                     )));
@@ -984,6 +1036,8 @@ class ApiController extends AppController {
 
     public function createInvoice() {
         if ($this->request->is('post')) {
+            $appointment = $this->User->Appointment->findById($this->request->data['appointment_id']);
+            $this->request->data['user_id'] = $appointment['Appointment']['user_id'];
             if ($this->User->Invoice->save($this->request->data)) {
                 $response['status'] = true;
             } else {
@@ -1471,6 +1525,21 @@ class ApiController extends AppController {
                 $response['data'] = $users;
             } else {
                 $response['status'] = false;
+            }
+        } else {
+            $response['status'] = false;
+            $response['message'] = 'Request is not valid';
+        }
+        echo json_encode($response);
+    }
+
+    public function deleteBarber() {
+        if ($this->request->is('post')) {
+            if ($this->User->Merchant->Barber->delete($this->request->data['id'])) {
+                $response['status'] = true;
+            } else {
+                $response['status'] = false;
+                $response['message'] = 'Can not delete';
             }
         } else {
             $response['status'] = false;
