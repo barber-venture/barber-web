@@ -270,8 +270,8 @@ class ApiController extends AppController {
                 $merchant['Merchant']['working_day'] = $this->Common->getWorkingDays($merchant['MerchantWorkingDay']);
                 $merchant['Merchant']['start_time'] = date("h:i a", strtotime($merchant['Merchant']['start_time']));
                 $merchant['Merchant']['end_time'] = date("h:i a", strtotime($merchant['Merchant']['end_time']));
-                $merchant['Merchant']['set_start_time'] = date("h:i:s", strtotime($merchant['Merchant']['start_time']));
-                $merchant['Merchant']['set_end_time'] = date("h:i:s", strtotime($merchant['Merchant']['end_time']));
+                $merchant['Merchant']['set_start_time'] = date("H:i:s", strtotime($merchant['Merchant']['start_time']));
+                $merchant['Merchant']['set_end_time'] = date("H:i:s", strtotime($merchant['Merchant']['end_time']));
                 $images = array();
                 foreach ($merchant['MerchantImage'] as $k => $m) {
                     $images[$k] = $m;
@@ -411,6 +411,7 @@ class ApiController extends AppController {
                         $userDetail = $this->User->UserDetail->findByUserId($appointment['Appointment']['user_id']);
                         if (!empty($userDetail)) {
                             $bookings[$k]['UserDetail'] = $userDetail['UserDetail'];
+                            $bookings[$k]['UserDetail']['profile_picture'] = $userDetail['UserDetail']['profile_picture'] != '' ? Configure::read('App.baseUrl') . "/files/" . $userDetail['UserDetail']['profile_picture'] : '';
                         }
                     }
                     $response['status'] = true;
@@ -437,6 +438,7 @@ class ApiController extends AppController {
                                 $userDetail = $this->User->UserDetail->findByUserId($appointment['Appointment']['user_id']);
                                 if (!empty($userDetail)) {
                                     $bookings[$k]['UserDetail'] = $userDetail['UserDetail'];
+                                    $bookings[$k]['UserDetail']['profile_picture'] = $userDetail['UserDetail']['profile_picture'] != '' ? Configure::read('App.baseUrl') . "/files/" . $userDetail['UserDetail']['profile_picture'] : '';
                                 }
                             }
                             $response['status'] = true;
@@ -540,6 +542,7 @@ class ApiController extends AppController {
                         $userDetail = $this->User->UserDetail->findByUserId($review['Review']['user_id']);
                         if (!empty($userDetail)) {
                             $bookings[$k]['UserDetail'] = $userDetail['UserDetail'];
+                            $bookings[$k]['UserDetail']['profile_picture'] = $userDetail['UserDetail']['profile_picture'] != '' ? Configure::read('App.baseUrl') . "/files/" . $userDetail['UserDetail']['profile_picture'] : '';
                         }
                     }
                     $response['status'] = true;
@@ -694,6 +697,27 @@ class ApiController extends AppController {
             $already = $this->User->UserDetail->findByUserId($this->request->data['user_id']);
             if (!empty($already)) {
                 $this->User->UserDetail->id = $already['UserDetail']['id'];
+                if (strpos($this->request->data['profile_picture'], Configure::read("App.baseUrl") . "/files/") == false) {
+                    if (file_exists("files/" . $already['UserDetail']['profile_picture'])) {
+                        unlink("files/" . $already['UserDetail']['profile_picture']);
+                    }
+                }
+            }
+            if (strpos($this->request->data['profile_picture'], Configure::read("App.baseUrl") . "/files/") == false) {
+                $filename = uniqid() . ".jpg";
+                $dest = "files";
+                if (!is_dir($dest)) {
+                    mkdir($dest);
+                }
+
+                $data = explode(',', $this->request->data['profile_picture']);
+                if (file_put_contents($dest . DIRECTORY_SEPARATOR . $filename, base64_decode($data[1]))) {
+                    $this->request->data['profile_picture'] = $filename;
+                } else {
+                    unset($this->request->data['profile_picture']);
+                }
+            } else {
+                unset($this->request->data['profile_picture']);
             }
             if ($this->User->UserDetail->save($this->request->data)) {
                 $response['status'] = true;
@@ -713,6 +737,7 @@ class ApiController extends AppController {
             $merchant = $this->User->UserDetail->find('first', array('conditions' => array(
                     'UserDetail.user_id' => $this->request->data['user_id']
             )));
+            $merchant['UserDetail']['profile_picture'] = $merchant['UserDetail']['profile_picture'] != '' ? Configure::read('App.baseUrl') . "/files/" . $merchant['UserDetail']['profile_picture'] : '';
             if (!empty($merchant)) {
                 $this->User->Review->recursive = 2;
                 $reviews = $this->User->Review->findAllByUserId($this->request->data['user_id']);
@@ -772,11 +797,21 @@ class ApiController extends AppController {
                 if ($this->User->Review->save($this->request->data)) {
                     if (isset($this->request->data['images']) && !empty($this->request->data['images'])) {
                         foreach ($this->request->data['images'] as $image) {
-                            $image['user_id'] = $this->request->data['user_id'];
-                            $image['review_id'] = $this->User->Review->getInsertID();
-                            $image['image'] = $image;
-                            $this->User->Review->create();
-                            $this->User->Review->save($image);
+                            $filename = uniqid() . ".jpg";
+                            $dest = "files";
+                            if (!is_dir($dest)) {
+                                mkdir($dest);
+                            }
+
+                            $data = explode(',', $image);
+
+                            if (file_put_contents($dest . DIRECTORY_SEPARATOR . $filename, base64_decode($data[1]))) {
+                                $image['user_id'] = $this->request->data['user_id'];
+                                $image['review_id'] = $this->User->Review->getInsertID();
+                                $image['image'] = $filename;
+                                $this->User->Review->UserImage->create();
+                                $this->User->Review->UserImage->save($image);
+                            }
                         }
                     }
                     $avg = $this->User->Review->find("all", array(
@@ -861,6 +896,7 @@ class ApiController extends AppController {
                     $this->User->Merchant->MerchantType->recursive = 0;
                     $merchantType = $this->User->Merchant->MerchantType->findAllByMerchantId($m['Merchant']['id']);
                     $merchantImage = $this->User->Merchant->MerchantImage->findByMerchantId($m['Merchant']['id']);
+                    $merchantImage['MerchantImage']['image'] = Configure::read('App.baseUrl') . "/files/" . $merchantImage['MerchantImage']['image'];
                     $merchant[$k] = $m;
                     $merchant[$k]['MerchantType'] = $merchantType;
                     $merchant[$k]['MerchantImage'] = $merchantImage;
@@ -901,6 +937,12 @@ class ApiController extends AppController {
                     $merchantView['user_id'] = $this->request->data['user_id'];
                     $this->User->MerchantView->save($merchantView);
                 }
+                $image = array();
+                foreach ($detail['MerchantImage'] as $i => $images) {
+                    $image[$i] = $images;
+                    $image[$i]['image'] = Configure::read('App.baseUrl') . "/files/" . $images['image'];
+                }
+                $detail['MerchantImage'] = $image;
                 $response['status'] = true;
                 $response['data'] = $detail;
             } else {
@@ -1383,6 +1425,7 @@ class ApiController extends AppController {
                     $newArray[$k] = $saloon;
                     $newArray[$k]['MerchantType'] = $types;
                     $newArray[$k]['MerchantImage'] = $images;
+                    $newArray[$k]['MerchantImage']['MerchantImage']['image'] = Configure::read("App.baseUrl") . "/files/" . $images['MerchantImage']['image'];
                 }
                 $saloons = $newArray;
                 $response['status'] = true;
@@ -1408,6 +1451,12 @@ class ApiController extends AppController {
                     $newArray[$k] = $review;
                     $newArray[$k]['Review']['created'] = date("d M - h:i a", strtotime($review['Review']['created']));
                     $newArray[$k]['UserImage'] = $this->User->UserImage->findAllByReviewId($review['Review']['id']);
+                    $image = array();
+                    foreach ($newArray[$k]['UserImage'] as $i => $images) {
+                        $image[$i] = $images;
+                        $image[$i]['UserImage']['image'] = Configure::read("App.baseUrl") . "/files/" . $images['UserImage']['image'];
+                    }
+                    $newArray[$k]['UserImage'] = $image;
                     $this->User->Merchant->recursive = -1;
                     $newArray[$k]['Merchant'] = $this->User->Merchant->findById($review['Review']['merchant_id']);
                     $newArray[$k]['MerchantType'] = $this->User->Merchant->MerchantType->findAllByMerchantId($review['Review']['merchant_id']);
@@ -1444,6 +1493,7 @@ class ApiController extends AppController {
                     $newArray[$k] = $comment;
                     $newArray[$k]['ReviewComment']['created'] = date("d M y h:i a", strtotime($comment['ReviewComment']['created']));
                     $newArray[$k]['User'] = $this->User->UserDetail->findByUserId($comment['ReviewComment']['user_id']);
+                    $newArray[$k]['User']['UserDetail']['profile_picture'] = $newArray[$k]['User']['UserDetail']['profile_picture'] != '' ? Configure::read("App.baseUrl") . "/files/" . $newArray[$k]['User']['UserDetail']['profile_picture'] : '';
                 }
                 $comments = $newArray;
                 $response['status'] = true;
@@ -1490,10 +1540,15 @@ class ApiController extends AppController {
                     //pr($merchant);die;
                     $merchantTypes = $this->User->Merchant->MerchantType->findAllByMerchantId($merchant['Merchant']['id']);
                     $userImages = $this->User->UserImage->findAllByReviewId($reviews['Review']['id']);
+                    $image = array();
+                    foreach ($userImages as $i => $images) {
+                        $image[$i] = $images;
+                        $image[$i]['UserImage']['image'] = Configure::read("App.baseUrl") . "/files/" . $images['UserImage']['image'];
+                    }
                     $newArray[$k]['Review'] = $reviews['Review'];
                     $newArray[$k]['Merchant'] = $merchant;
                     $newArray[$k]['MerchantType'] = $merchantTypes;
-                    $newArray[$k]['UserImage'] = $userImages;
+                    $newArray[$k]['UserImage'] = $image;
                 }
                 $getReviews = $newArray;
                 $response['status'] = true;
@@ -1520,6 +1575,14 @@ class ApiController extends AppController {
                     "UserDetail.name like " => $this->request->data['name'] . "%",
                     "UserDetail.user_id <>" => $allFollowers,
             )));
+            $image = array();
+            if (!empty($users['UserDetail'])) {
+                foreach ($users['UserDetail'] as $i => $user) {
+                    $image[$i] = $user;
+                    $image[$i]['profile_picture'] = $user['profile_picture'] != '' ? Configure::read("App.baseUrl") . "/files/" . $user['profile_picture'] : '';
+                }
+                $users['UserDetail'] = $image;
+            }
             if (!empty($users)) {
                 $response['status'] = true;
                 $response['data'] = $users;
